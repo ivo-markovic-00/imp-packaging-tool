@@ -25,7 +25,7 @@ def load_data():
 df = load_data()
 
 # -----------------------------
-# 3. Sidebar Filters
+# 3. Sidebar Filters (refined)
 # -----------------------------
 st.sidebar.header("🔎 Filters")
 
@@ -37,11 +37,15 @@ selected_depts = st.sidebar.multiselect(
     default=[]
 )
 
-# --- Company Type (multi-select)
-company_types = sorted(
-    set(sum((str(x).split(";") for x in df["Company type"].dropna()), []))
-)
-company_types = [x.strip() for x in company_types if x.strip()]
+# --- Company Type (multi-select, deduplicated)
+company_types_raw = set()
+for val in df["Company type"].dropna():
+    for part in str(val).split(";"):
+        clean_part = part.strip()
+        if clean_part:
+            company_types_raw.add(clean_part)
+company_types = sorted(company_types_raw)
+
 selected_company_types = st.sidebar.multiselect(
     "Company Type(s)",
     options=company_types,
@@ -49,14 +53,8 @@ selected_company_types = st.sidebar.multiselect(
 )
 
 # --- Packaging Type (single select)
-packaging_types = ["General (All Packaging)", "Food Packaging"]
-selected_packaging = st.sidebar.selectbox("Packaging Type", options=["All"] + packaging_types)
-
-# Map new labels back to original data values
-type_mapping = {
-    "General (All Packaging)": "General (All Products)",
-    "Food Packaging": "Food"
-}
+packaging_types = ["All", "Food Packaging"]
+selected_packaging = st.sidebar.selectbox("Packaging Type", options=packaging_types)
 
 # --- Keyword search
 search_term = st.sidebar.text_input("Keyword Search", placeholder="Search any text...")
@@ -75,9 +73,8 @@ if selected_company_types:
     )
     filtered = filtered[mask]
 
-if selected_packaging != "All":
-    mapped_value = type_mapping[selected_packaging]
-    filtered = filtered[filtered["Product Type"] == mapped_value]
+if selected_packaging == "Food Packaging":
+    filtered = filtered[filtered["Product Type"] == "Food"]
 
 if search_term:
     mask = filtered.apply(
@@ -91,7 +88,6 @@ if search_term:
 # -----------------------------
 st.markdown(f"### Filtered Results — {len(filtered)} records shown")
 
-# Visible columns (your new order)
 display_cols = [
     "Trigger",
     "Description",
@@ -104,7 +100,6 @@ display_cols = [
     "Evidence to Collect",
 ]
 
-# Column width config (approximate)
 column_config = {
     "Trigger": st.column_config.TextColumn(width="small"),
     "Description": st.column_config.TextColumn(width="large"),
@@ -117,7 +112,6 @@ column_config = {
     "Evidence to Collect": st.column_config.TextColumn(width="medium"),
 }
 
-# Read-only, full-width table (no internal scroll)
 st.data_editor(
     filtered[display_cols],
     hide_index=True,
@@ -139,16 +133,15 @@ st.download_button(
 )
 
 # -----------------------------
-# 7. Styling
+# 7. Styling (no scrollbars + expand when sidebar hidden)
 # -----------------------------
 st.markdown("""
 <style>
-/* Remove inner scrollbars */
+/* Remove internal scrollbars and allow text wrapping */
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
     overflow: visible !important;
 }
 
-/* Table styling */
 [data-testid="stDataFrame"] table, [data-testid="stDataEditor"] table {
     border-collapse: collapse !important;
     width: 100% !important;
@@ -170,9 +163,18 @@ st.markdown("""
     vertical-align: top !important;
 }
 
-/* Make the entire table naturally expand (no separate scroll) */
+/* Let page scrolling handle table height */
+main div[data-testid="stVerticalBlock"] {
+    overflow-y: visible !important;
+}
+
+/* Sidebar width + auto-expand when collapsed */
 section[data-testid="stSidebar"] {
     min-width: 320px !important;
+}
+[data-testid="collapsedControl"] ~ div[data-testid="stVerticalBlock"] {
+    margin-left: 0 !important;
+    width: 100% !important;
 }
 </style>
 """, unsafe_allow_html=True)
