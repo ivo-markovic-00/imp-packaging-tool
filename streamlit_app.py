@@ -5,12 +5,12 @@ import streamlit as st
 # 1. Page & Layout Settings
 # -----------------------------
 st.set_page_config(
-    page_title="IMP Packaging Compliance Tool",
+    page_title="Packaging Compliance Tool",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("📦 IMP Packaging Compliance Tool")
+st.title("📦 Packaging Compliance Tool")
 st.caption("Business-oriented EU/NL packaging compliance overview (updated Oct 2025) — built by Ivo Markovic Piñol")
 
 # -----------------------------
@@ -25,7 +25,7 @@ def load_data():
 df = load_data()
 
 # -----------------------------
-# 3. Sidebar Filters (refined + reordered)
+# 3. Sidebar Filters (refined order)
 # -----------------------------
 st.sidebar.header("🔎 Filters")
 
@@ -133,50 +133,59 @@ st.download_button(
 )
 
 # -----------------------------
-# 7. Styling (expand on sidebar collapse + no scrollbars)
+# 7. Styling (full-width + text wrapping + expand on collapse)
 # -----------------------------
 st.markdown("""
 <style>
-/* Remove internal scrollbars and wrap text */
-[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
-    overflow: visible !important;
+/* Wrap text properly in cells and auto-expand row height */
+[data-testid="stDataEditor"] td, [data-testid="stDataFrame"] td {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    line-height: 1.5 !important;
+    height: auto !important;
+    vertical-align: top !important;
 }
 
-[data-testid="stDataFrame"] table, [data-testid="stDataEditor"] table {
-    border-collapse: collapse !important;
-    width: 100% !important;
-}
-
-[data-testid="stDataFrame"] th, [data-testid="stDataEditor"] th {
+/* Make header consistent */
+[data-testid="stDataEditor"] th, [data-testid="stDataFrame"] th {
     background-color: #f7f7f7 !important;
     font-weight: 600 !important;
     color: #333 !important;
     border-bottom: 1px solid #ddd !important;
 }
 
-[data-testid="stDataFrame"] td, [data-testid="stDataEditor"] td {
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-    line-height: 1.4 !important;
-    font-size: 0.9rem !important;
-    border-bottom: 1px solid #eee !important;
-    vertical-align: top !important;
+/* Remove inner scrollbars entirely */
+[data-testid="stDataEditor"], [data-testid="stDataFrame"] {
+    overflow: visible !important;
 }
 
-/* Let page scrolling handle table height */
-main div[data-testid="stVerticalBlock"] {
-    overflow-y: visible !important;
+/* Remove any max width constraints on the main container */
+.block-container {
+    padding: 1rem 2rem 2rem 2rem !important;
+    max-width: 100% !important;
+    width: 100% !important;
 }
 
-/* Sidebar width */
+/* Let the table area use all horizontal space */
+[data-testid="stAppViewContainer"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-left: 0 !important;
+}
+
+/* Sidebar width (when expanded) */
 section[data-testid="stSidebar"] {
     min-width: 320px !important;
 }
 
-/* 💡 When sidebar is collapsed, let the main container use full width */
+/* 🔥 When sidebar collapses, reclaim that space */
+[data-testid="stSidebarCollapsedControl"] ~ div[data-testid="stAppViewContainer"],
+[data-testid="collapsedControl"] ~ div[data-testid="stAppViewContainer"],
 [data-testid="stAppViewContainer"] > div:first-child {
     margin-left: 0 !important;
     width: 100% !important;
+    max-width: 100% !important;
 }
 </style>
 """, unsafe_allow_html=True)
