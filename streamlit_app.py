@@ -1,117 +1,164 @@
-import streamlit as st
 import pandas as pd
-from pathlib import Path
+import streamlit as st
 
-st.set_page_config(page_title="NL/EU Packaging Compliance — Prototype", layout="wide")
+# -----------------------------
+# 1. Page & Layout Settings
+# -----------------------------
+st.set_page_config(
+    page_title="IMP Packaging Compliance Tool",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ---------- 0) Settings ----------
-DATA_PATH = Path("data/final_table.xlsx")  # put your file here
+st.title("📦 IMP Packaging Compliance Tool")
+st.caption("Business-oriented EU/NL packaging compliance overview (updated Oct 2025)")
 
-# Department choices + short explanations (tooltips)
-DEPT_DESCRIPTIONS = {
-    "Design & R&D": "Develops formats/materials; ensures recyclability, minimisation, and composition rules.",
-    "Supply Chain & Procurement": "Sources compliant materials/suppliers; manages recycled content, certifications, and chemical restrictions via contracts.",
-    "Marketing & Labelling": "Manages environmental claims, artwork, and mandatory packaging labels (EU/NL).",
-    "Finance & EPR": "Handles producer registration, EPR reporting & fees, and eco-modulation budgets.",
-    "Operations & Logistics": "Runs filling, reuse/cleaning/return systems, DRS participation, and collection logistics.",
-    "Compliance & Data Reporting": "Maintains DoC/supplier/test evidence, tracks legal changes, and ensures accurate regulatory reporting."
-}
-DEPT_LIST = ["All (General)"] + list(DEPT_DESCRIPTIONS.keys())
-
-# Keywords → Department mapping (used if your Excel lacks a Department column)
-KEYWORD_MAP = [
-    (["design","r&d","material","recycl","reuse","labell"], "Design & R&D"),
-    (["supply","procure","supplier","sourcing","pcr","contract"], "Supply Chain & Procurement"),
-    (["marketing","claim","label","logo","marking"], "Marketing & Labelling"),
-    (["finance","epr","fee","producer register","afvalfonds","verpact"], "Finance & EPR"),
-    (["operation","logist","drs","return","washing","cleaning","collection"], "Operations & Logistics"),
-    (["compliance","legal","doc","fcm","reach","report","csrd","esrs","evidence"], "Compliance & Data Reporting"),
-]
-
-# Columns to show in the results
-RESULT_COLS = [
-    "Trigger", "Regulation", "Reference", "Applicability",
-    "Consequence", "Deadline", "Status", "Evidence to Collect"
-]
-
-# ---------- 1) Load ----------
-@st.cache_data(show_spinner=False)
-def load_excel(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path)
-    # Normalise column names (trim spaces)
-    df.columns = [c.strip() for c in df.columns]
+# -----------------------------
+# 2. Load Data
+# -----------------------------
+@st.cache_data
+def load_data():
+    df = pd.read_excel("data/final_table.xlsx")
+    # Clean up column names for consistent access
+    df.columns = df.columns.str.strip()
     return df
 
-if not DATA_PATH.exists():
-    st.error("Excel not found. Upload your file to `data/final_table.xlsx` in the repo.")
-    st.stop()
+df = load_data()
 
-df = load_excel(DATA_PATH)
+# -----------------------------
+# 3. Sidebar Filters
+# -----------------------------
+st.sidebar.header("🔎 Filters")
 
-# ---------- 2) Ensure we have a Department column ----------
-def infer_department(row: pd.Series) -> str:
-    # Prefer existing column if present
-    for col in ["Department", "Business Function / Focus", "Main Function Impacted"]:
-        if col in row.index and pd.notna(row[col]):
-            text = str(row[col]).lower()
-            for kws, dept in KEYWORD_MAP:
-                if any(k in text for k in kws):
-                    return dept
-    # Fallback: search in Description/Trigger
-    for col in ["Description", "Trigger"]:
-        if col in row.index and pd.notna(row[col]):
-            text = str(row[col]).lower()
-            for kws, dept in KEYWORD_MAP:
-                if any(k in text for k in kws):
-                    return dept
-    return "Compliance & Data Reporting"  # safe default owner
+# --- Department (multi-select)
+departments = sorted(df["Department"].dropna().unique().tolist())
+selected_depts = st.sidebar.multiselect(
+    "Department(s)",
+    options=departments,
+    default=[]
+)
 
-if "Department" not in df.columns:
-    df["Department"] = df.apply(infer_department, axis=1)
+# --- Company Type (multi-select, semicolon-split logic)
+company_types = sorted(
+    set(sum((str(x).split(";") for x in df["Company type"].dropna()), []))
+)
+company_types = [x.strip() for x in company_types if x.strip()]
+selected_company_types = st.sidebar.multiselect(
+    "Company Type(s)",
+    options=company_types,
+    default=[]
+)
 
-# ---------- 3) Sidebar filters ----------
-st.sidebar.header("Filters")
+# --- Product Type (single select)
+product_types = ["General (All Products)", "Food"]
+selected_product = st.sidebar.selectbox("Product Type", options=["All"] + product_types)
 
-dept_choice = st.sidebar.selectbox("Department", DEPT_LIST, index=0, help="Pick who you are / where you work.")
-if dept_choice != "All (General)":
-    st.sidebar.info(DEPT_DESCRIPTIONS[dept_choice])
+# --- Keyword search
+search_term = st.sidebar.text_input("Keyword Search", placeholder="Search any text...")
 
-# Optional: quick search
-q = st.sidebar.text_input("Search text (optional)", placeholder="Search in Trigger / Description / Regulation")
-
-# ---------- 4) Apply filters ----------
+# -----------------------------
+# 4. Filtering Logic
+# -----------------------------
 filtered = df.copy()
 
-if dept_choice != "All (General)":
-    filtered = filtered[filtered["Department"] == dept_choice]
+if selected_depts:
+    filtered = filtered[filtered["Department"].isin(selected_depts)]
 
-if q:
-    qlow = q.lower()
-    hay_cols = [c for c in ["Trigger","Description","Regulation","Applicability","Evidence to Collect"] if c in filtered.columns]
-    mask = False
-    for c in hay_cols:
-        mask = mask | filtered[c].astype(str).str.lower().str.contains(qlow, na=False)
+if selected_company_types:
+    mask = filtered["Company type"].apply(
+        lambda x: any(ct in str(x) for ct in selected_company_types)
+    )
     filtered = filtered[mask]
 
-# Keep only known result columns if they exist
-cols_to_show = [c for c in RESULT_COLS if c in filtered.columns]
-cols_to_show = (["Department"] if "Department" in filtered.columns else []) + cols_to_show
-if not cols_to_show:
-    cols_to_show = filtered.columns.tolist()
+if selected_product != "All":
+    filtered = filtered[filtered["Product Type"] == selected_product]
 
-st.markdown("### Applicable business triggers")
-st.caption("Filtered by your selections. Download to CSV for sharing or analysis.")
-st.dataframe(filtered[cols_to_show], use_container_width=True, hide_index=True)
+if search_term:
+    mask = filtered.apply(
+        lambda row: row.astype(str).str.contains(search_term, case=False, na=False).any(),
+        axis=1
+    )
+    filtered = filtered[mask]
 
-# ---------- 5) Download ----------
-csv = filtered[cols_to_show].to_csv(index=False).encode("utf-8")
-st.download_button("Download filtered CSV", data=csv, file_name="filtered_triggers.csv", mime="text/csv")
+# -----------------------------
+# 5. Display Settings
+# -----------------------------
+st.subheader(f"Filtered Results ({len(filtered)} records)")
 
-# ---------- 6) Footnote ----------
-with st.expander("About this prototype"):
-    st.write("""
-    • Data is loaded read-only from your Excel.  
-    • Department is taken from your file if present; otherwise inferred from keywords.  
-    • Use the search box to refine results.  
-    • Update the Excel and redeploy to refresh content.
-    """)
+# Choose columns for display
+display_cols = [
+    "Department",
+    "Trigger",
+    "Description",
+    "Regulation",
+    "Reference",
+    "Applicability",
+    "Consequence",
+    "Deadline",
+    "Status",
+    "Evidence to Collect",
+]
+
+# Define column widths (approximate %)
+column_config = {
+    "Department": st.column_config.TextColumn(width="small"),
+    "Trigger": st.column_config.TextColumn(width="small"),
+    "Description": st.column_config.TextColumn(width="large"),
+    "Regulation": st.column_config.TextColumn(width="small"),
+    "Reference": st.column_config.TextColumn(width="small"),
+    "Applicability": st.column_config.TextColumn(width="medium"),
+    "Consequence": st.column_config.TextColumn(width="small"),
+    "Deadline": st.column_config.TextColumn(width="small"),
+    "Status": st.column_config.TextColumn(width="small"),
+    "Evidence to Collect": st.column_config.TextColumn(width="medium"),
+}
+
+# -----------------------------
+# 6. Display Table (read-only editor)
+# -----------------------------
+st.data_editor(
+    filtered[display_cols],
+    hide_index=True,
+    use_container_width=True,
+    disabled=True,  # read-only mode
+    column_config=column_config,
+    key="compliance_table",
+)
+
+# -----------------------------
+# 7. Download CSV Button
+# -----------------------------
+csv = filtered.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="💾 Download Filtered Results (CSV)",
+    data=csv,
+    file_name="filtered_compliance_results.csv",
+    mime="text/csv"
+)
+
+# -----------------------------
+# 8. Optional Styling
+# -----------------------------
+st.markdown("""
+<style>
+/* --- Table aesthetics --- */
+[data-testid="stDataFrame"] table, [data-testid="stDataEditor"] table {
+    border-collapse: collapse !important;
+}
+[data-testid="stDataFrame"] th, [data-testid="stDataEditor"] th {
+    background-color: #f7f7f7 !important;
+    font-weight: 600 !important;
+    color: #333 !important;
+}
+[data-testid="stDataFrame"] td, [data-testid="stDataEditor"] td {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    line-height: 1.4 !important;
+    font-size: 0.9rem !important;
+}
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+</style>
+""", unsafe_allow_html=True)
