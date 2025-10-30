@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📦 IMP Packaging Compliance Tool")
-st.caption("Business-oriented EU/NL packaging compliance overview (updated Oct 2025)")
+st.caption("Business-oriented EU/NL packaging compliance overview (updated Oct 2025) — built by Ivo Markovic Piñol")
 
 # -----------------------------
 # 2. Load Data
@@ -25,17 +25,9 @@ def load_data():
 df = load_data()
 
 # -----------------------------
-# 3. Sidebar Filters (refined)
+# 3. Sidebar Filters (refined + reordered)
 # -----------------------------
 st.sidebar.header("🔎 Filters")
-
-# --- Department (multi-select)
-departments = sorted(df["Department"].dropna().unique().tolist())
-selected_depts = st.sidebar.multiselect(
-    "Department(s)",
-    options=departments,
-    default=[]
-)
 
 # --- Company Type (multi-select, deduplicated)
 company_types_raw = set()
@@ -52,6 +44,14 @@ selected_company_types = st.sidebar.multiselect(
     default=[]
 )
 
+# --- Department (multi-select)
+departments = sorted(df["Department"].dropna().unique().tolist())
+selected_depts = st.sidebar.multiselect(
+    "Department(s)",
+    options=departments,
+    default=[]
+)
+
 # --- Packaging Type (single select)
 packaging_types = ["All", "Food Packaging"]
 selected_packaging = st.sidebar.selectbox("Packaging Type", options=packaging_types)
@@ -64,14 +64,14 @@ search_term = st.sidebar.text_input("Keyword Search", placeholder="Search any te
 # -----------------------------
 filtered = df.copy()
 
-if selected_depts:
-    filtered = filtered[filtered["Department"].isin(selected_depts)]
-
 if selected_company_types:
     mask = filtered["Company type"].apply(
         lambda x: any(ct in str(x) for ct in selected_company_types)
     )
     filtered = filtered[mask]
+
+if selected_depts:
+    filtered = filtered[filtered["Department"].isin(selected_depts)]
 
 if selected_packaging == "Food Packaging":
     filtered = filtered[filtered["Product Type"] == "Food"]
@@ -133,11 +133,11 @@ st.download_button(
 )
 
 # -----------------------------
-# 7. Styling (no scrollbars + expand when sidebar hidden)
+# 7. Styling (expand on sidebar collapse + no scrollbars)
 # -----------------------------
 st.markdown("""
 <style>
-/* Remove internal scrollbars and allow text wrapping */
+/* Remove internal scrollbars and wrap text */
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
     overflow: visible !important;
 }
@@ -168,11 +168,13 @@ main div[data-testid="stVerticalBlock"] {
     overflow-y: visible !important;
 }
 
-/* Sidebar width + auto-expand when collapsed */
+/* Sidebar width */
 section[data-testid="stSidebar"] {
     min-width: 320px !important;
 }
-[data-testid="collapsedControl"] ~ div[data-testid="stVerticalBlock"] {
+
+/* 💡 When sidebar is collapsed, let the main container use full width */
+[data-testid="stAppViewContainer"] > div:first-child {
     margin-left: 0 !important;
     width: 100% !important;
 }
