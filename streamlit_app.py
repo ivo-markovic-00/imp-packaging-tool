@@ -19,9 +19,6 @@ st.caption("Business-oriented EU/NL packaging compliance overview (updated Oct 2
 @st.cache_data
 def load_data():
     df = pd.read_excel("data/final_table.xlsx")
-    st.write("Columns loaded:", list(df.columns))
-    st.stop()  # ⬅ inside the function, same indentation level
-    # Clean up column names for consistent access
     df.columns = df.columns.str.strip()
     return df
 
