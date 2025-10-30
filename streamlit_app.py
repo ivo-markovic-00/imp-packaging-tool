@@ -37,7 +37,7 @@ selected_depts = st.sidebar.multiselect(
     default=[]
 )
 
-# --- Company Type (multi-select, semicolon-split logic)
+# --- Company Type (multi-select)
 company_types = sorted(
     set(sum((str(x).split(";") for x in df["Company type"].dropna()), []))
 )
@@ -48,9 +48,15 @@ selected_company_types = st.sidebar.multiselect(
     default=[]
 )
 
-# --- Product Type (single select)
-product_types = ["General (All Products)", "Food"]
-selected_product = st.sidebar.selectbox("Product Type", options=["All"] + product_types)
+# --- Packaging Type (single select)
+packaging_types = ["General (All Packaging)", "Food Packaging"]
+selected_packaging = st.sidebar.selectbox("Packaging Type", options=["All"] + packaging_types)
+
+# Map new labels back to original data values
+type_mapping = {
+    "General (All Packaging)": "General (All Products)",
+    "Food Packaging": "Food"
+}
 
 # --- Keyword search
 search_term = st.sidebar.text_input("Keyword Search", placeholder="Search any text...")
@@ -69,8 +75,9 @@ if selected_company_types:
     )
     filtered = filtered[mask]
 
-if selected_product != "All":
-    filtered = filtered[filtered["Product Type"] == selected_product]
+if selected_packaging != "All":
+    mapped_value = type_mapping[selected_packaging]
+    filtered = filtered[filtered["Product Type"] == mapped_value]
 
 if search_term:
     mask = filtered.apply(
@@ -80,13 +87,12 @@ if search_term:
     filtered = filtered[mask]
 
 # -----------------------------
-# 5. Display Settings
+# 5. Display Table
 # -----------------------------
-st.subheader(f"Filtered Results ({len(filtered)} records)")
+st.markdown(f"### Filtered Results — {len(filtered)} records shown")
 
-# Choose columns for display
+# Visible columns (your new order)
 display_cols = [
-    "Department",
     "Trigger",
     "Description",
     "Regulation",
@@ -98,9 +104,8 @@ display_cols = [
     "Evidence to Collect",
 ]
 
-# Define column widths (approximate %)
+# Column width config (approximate)
 column_config = {
-    "Department": st.column_config.TextColumn(width="small"),
     "Trigger": st.column_config.TextColumn(width="small"),
     "Description": st.column_config.TextColumn(width="large"),
     "Regulation": st.column_config.TextColumn(width="small"),
@@ -112,20 +117,18 @@ column_config = {
     "Evidence to Collect": st.column_config.TextColumn(width="medium"),
 }
 
-# -----------------------------
-# 6. Display Table (read-only editor)
-# -----------------------------
+# Read-only, full-width table (no internal scroll)
 st.data_editor(
     filtered[display_cols],
     hide_index=True,
     use_container_width=True,
-    disabled=True,  # read-only mode
+    disabled=True,
     column_config=column_config,
     key="compliance_table",
 )
 
 # -----------------------------
-# 7. Download CSV Button
+# 6. Download CSV Button
 # -----------------------------
 csv = filtered.to_csv(index=False).encode("utf-8")
 st.download_button(
@@ -136,28 +139,40 @@ st.download_button(
 )
 
 # -----------------------------
-# 8. Optional Styling
+# 7. Styling
 # -----------------------------
 st.markdown("""
 <style>
-/* --- Table aesthetics --- */
+/* Remove inner scrollbars */
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+    overflow: visible !important;
+}
+
+/* Table styling */
 [data-testid="stDataFrame"] table, [data-testid="stDataEditor"] table {
     border-collapse: collapse !important;
+    width: 100% !important;
 }
+
 [data-testid="stDataFrame"] th, [data-testid="stDataEditor"] th {
     background-color: #f7f7f7 !important;
     font-weight: 600 !important;
     color: #333 !important;
+    border-bottom: 1px solid #ddd !important;
 }
+
 [data-testid="stDataFrame"] td, [data-testid="stDataEditor"] td {
     white-space: normal !important;
     overflow-wrap: anywhere !important;
     line-height: 1.4 !important;
     font-size: 0.9rem !important;
+    border-bottom: 1px solid #eee !important;
+    vertical-align: top !important;
 }
-[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
-    max-height: 70vh;
-    overflow-y: auto;
+
+/* Make the entire table naturally expand (no separate scroll) */
+section[data-testid="stSidebar"] {
+    min-width: 320px !important;
 }
 </style>
 """, unsafe_allow_html=True)
