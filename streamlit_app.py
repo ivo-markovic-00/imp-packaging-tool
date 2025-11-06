@@ -132,21 +132,23 @@ def extract_deadline_as_date(val) -> date | None:
 
 def categorize_deadline(deadline_val, status_val) -> str:
     """Three buckets: In force / Due < 1 year / Due > 1 year."""
-    # Respect explicit status
+    # 1️⃣ Always trust explicit status first
     if isinstance(status_val, str) and "in force" in status_val.lower():
         return "In force"
 
+    # 2️⃣ Otherwise, try to parse the date
     d = extract_deadline_as_date(deadline_val)
     if d is None:
-        # With only 3 buckets, treat unknowns as long horizon (safer than 'in force')
-        return "Due > 1 year"
+        return "Due > 1 year"  # default conservative
 
+    # 3️⃣ Bucket purely by date
     if d <= TODAY:
         return "In force"
     elif (d - TODAY).days <= 365:
         return "Due < 1 year"
     else:
         return "Due > 1 year"
+
 
 # Compute once
 df["__deadline_date__"] = df["Deadline"].apply(extract_deadline_as_date)
