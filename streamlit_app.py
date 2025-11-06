@@ -31,11 +31,11 @@ cache_bust = Path(DATA_PATH).stat().st_mtime  # auto-refresh cache when file cha
 df = load_data(DATA_PATH, cache_bust)
 
 # -----------------------------
-# 3) Robust deadline parsing (STATUS-DRIVEN)
+# 3) Robust deadline parsing (DEADLINE-DRIVEN)
 # -----------------------------
 TODAY = date.today()
 
-# Extract an ISO-like date from any text (covers: "Estimated 2028-01-01", "2026-09-27 00:00:00", etc.)
+# Extract ISO date anywhere in text (handles "Estimated 2028-01-01" and "2026-09-27 00:00:00")
 ISO_IN_TEXT = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 def extract_date_from_any(val):
@@ -54,7 +54,7 @@ def extract_date_from_any(val):
     if not s:
         return None
 
-    # Find ISO yyyy-mm-dd anywhere in the text (works for 'Estimated 2028-01-01' and '2026-09-27 00:00:00')
+    # Find ISO yyyy-mm-dd anywhere in the text
     m = ISO_IN_TEXT.search(s)
     if m:
         try:
@@ -62,7 +62,7 @@ def extract_date_from_any(val):
         except Exception:
             pass
 
-    # Last resort: generic parser (may parse dd/mm/yy etc.)
+    # Last resort: generic parser
     try:
         ts = pd.to_datetime(s, errors="coerce")
         if pd.notna(ts):
@@ -74,28 +74,28 @@ def extract_date_from_any(val):
 
 def categorize_deadline_from_row(row):
     """
-    Three buckets based on your concrete Status patterns:
-    - 'In Force' (any case/spacing)  → In force
-    - 'Estimated YYYY-MM-DD'         → parse date and bucket
-    - 'YYYY-MM-DD'                   → parse date and bucket
-    Fallback to Deadline if Status has no usable date.
+    Three buckets based on ACTUAL values found in your table:
+    - Deadline: 'In Force' (any case/spacing)         → In force
+    - Deadline: 'Estimated YYYY-MM-DD' or 'YYYY-MM-DD' → parse & bucket
+    - Fallback to Status if it contains a usable date.
     """
-    raw_status = row.get("Status", "")
-    status = str(raw_status or "").strip().lower().replace("\u00a0", " ")
+    raw_deadline = row.get("Deadline", "")
+    deadline_txt = str(raw_deadline or "").strip().lower().replace("\u00a0", " ")
 
-    # 1) Exact 'In Force' should ALWAYS be in force
-    if status == "in force":
+    # 1) Primary: DEADLINE says "In Force" → always In force
+    if deadline_txt == "in force":
         return "In force"
 
-    # 2) Prefer date embedded in STATUS (handles 'Estimated 2028-01-01' and plain ISO dates)
-    d = extract_date_from_any(raw_status)
+    # 2) Try to extract a date from DEADLINE first (covers Estimated + plain dates)
+    d = extract_date_from_any(raw_deadline)
 
-    # 3) Fallback to Deadline column if Status has no usable date
+    # 3) Fallback: try STATUS (in case a date is there)
     if d is None:
-        d = extract_date_from_any(row.get("Deadline"))
+        d = extract_date_from_any(row.get("Status"))
 
-    # 4) Bucket by date (if still nothing, be conservative: far horizon)
+    # 4) Bucket
     if d is None:
+        # With only 3 buckets, treat unknowns as farther out (safer than mislabeling In force)
         return "Due > 1 year"
 
     if d <= TODAY:
@@ -182,7 +182,7 @@ display_cols = [
     "Reference",
     "Applicability",
     "Consequence",
-    "Deadline",           # show original text
+    "Deadline",           # show original text as-is
     "Status",
     "Evidence to Collect",
 ]
