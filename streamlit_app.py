@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
-from pathlib import Path  # ← added import
+from pathlib import Path
+from datetime import date
 
 # -----------------------------
 # 1) Page & Layout
@@ -16,12 +17,17 @@ st.caption(
 )
 
 # -----------------------------
-# 2) Data (updated caching)
+# 2) Data (with date normalization + cache auto-refresh)
 # -----------------------------
 @st.cache_data
 def load_data(data_path: str, cache_bust: float):
     df = pd.read_excel(data_path)
     df.columns = df.columns.str.strip()
+
+    # --- Normalize datetime columns ---
+    if "Deadline" in df.columns:
+        df["Deadline"] = pd.to_datetime(df["Deadline"], errors="coerce").dt.date
+
     return df
 
 DATA_PATH = "data/final_table.xlsx"
@@ -30,7 +36,33 @@ cache_bust = Path(DATA_PATH).stat().st_mtime  # auto-refresh cache when file cha
 df = load_data(DATA_PATH, cache_bust)
 
 # -----------------------------
-# 3) Sidebar Filters (order)
+# 3) Derive Deadline Category
+# -----------------------------
+TODAY = date.today()
+
+def categorize_deadline(deadline, status):
+    """Categorize by business relevance: In force / <1 year / >1 year."""
+    # Prefer status when explicitly says "In force"
+    if isinstance(status, str) and "in force" in status.lower():
+        return "In force"
+    if pd.isna(deadline):
+        return "Due > 1 year"  # fallback: assume far in future if missing
+    try:
+        if deadline <= TODAY:
+            return "In force"
+        elif (deadline - TODAY).days <= 365:
+            return "Due < 1 year"
+        else:
+            return "Due > 1 year"
+    except Exception:
+        return "Due > 1 year"
+
+df["Deadline Category"] = df.apply(
+    lambda r: categorize_deadline(r.get("Deadline"), r.get("Status")), axis=1
+)
+
+# -----------------------------
+# 4) Sidebar Filters (with deadline filter)
 # -----------------------------
 st.sidebar.header("🔎 Filters")
 
@@ -57,11 +89,15 @@ selected_packaging = st.sidebar.selectbox(
     "Packaging Type", options=["All", "Food Packaging"]
 )
 
+# Deadline (single)
+deadline_options = ["All", "In force", "Due < 1 year", "Due > 1 year"]
+selected_deadline = st.sidebar.selectbox("Deadline", options=deadline_options, index=0)
+
 # Keyword search
 search_term = st.sidebar.text_input("Keyword Search", placeholder="Search any text...")
 
 # -----------------------------
-# 4) Filtering
+# 5) Filtering
 # -----------------------------
 filtered = df.copy()
 
@@ -77,6 +113,9 @@ if selected_depts:
 if selected_packaging == "Food Packaging":
     filtered = filtered[filtered["Product Type"] == "Food"]
 
+if selected_deadline != "All":
+    filtered = filtered[filtered["Deadline Category"] == selected_deadline]
+
 if search_term:
     mask = filtered.apply(
         lambda row: row.astype(str).str.contains(search_term, case=False, na=False).any(),
@@ -85,7 +124,7 @@ if search_term:
     filtered = filtered[mask]
 
 # -----------------------------
-# 5) Table
+# 6) Table
 # -----------------------------
 st.markdown(f"### Filtered Results — {len(filtered)} records shown")
 
@@ -132,7 +171,7 @@ st.download_button(
 )
 
 # -----------------------------
-# 6) Styling: real wrap + no inner scroll + full width on collapse
+# 7) Styling: real wrap + no inner scroll + full width on collapse
 # -----------------------------
 st.markdown(
     """
@@ -157,9 +196,7 @@ st.markdown(
 }
 
 /* 
-Force true WRAP in editor cells:
-Streamlit renders a grid with role="gridcell". The inner content sits in multiple nested divs/spans.
-We override all layers to allow wrapping and vertical growth.
+Force true WRAP in editor cells
 */
 [data-testid="stDataEditor"] [role="gridcell"],
 [data-testid="stDataEditor"] [role="gridcell"] * {
@@ -170,7 +207,7 @@ We override all layers to allow wrapping and vertical growth.
     overflow: visible !important;
 }
 
-/* Make rows auto-height and align to the top so multiple lines are visible */
+/* Make rows auto-height and align to the top */
 [data-testid="stDataEditor"] [role="row"] {
     align-items: flex-start !important;
 }
@@ -178,14 +215,14 @@ We override all layers to allow wrapping and vertical growth.
     align-items: flex-start !important;
 }
 
-/* Slightly taller baseline for readability */
+/* Slightly taller baseline */
 [data-testid="stDataEditor"] td, [data-testid="stDataFrame"] td {
     line-height: 1.5 !important;
     vertical-align: top !important;
     border-bottom: 1px solid #eee !important;
 }
 
-/* --- Sidebar normal width --- */
+/* --- Sidebar width --- */
 section[data-testid="stSidebar"] {
     min-width: 320px !important;
 }
@@ -199,7 +236,7 @@ section[data-testid="stSidebar"] {
     max-width: 100% !important;
 }
 
-/* --- Kill any horizontal scrollbar remnants in the editor wrapper --- */
+/* --- Kill any horizontal scrollbar remnants --- */
 [data-testid="stDataEditor"] > div:has([role="grid"]) {
     overflow-x: hidden !important;
 }
