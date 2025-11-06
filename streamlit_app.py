@@ -1,7 +1,9 @@
 import pandas as pd
 import streamlit as st
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
+import re
+import math
 
 # -----------------------------
 # 1) Page & Layout
@@ -17,52 +19,143 @@ st.caption(
 )
 
 # -----------------------------
-# 2) Data (with date normalization + cache auto-refresh)
+# 2) Data (with cache auto-refresh)
 # -----------------------------
 @st.cache_data
 def load_data(data_path: str, cache_bust: float):
     df = pd.read_excel(data_path)
     df.columns = df.columns.str.strip()
-
-    # --- Normalize datetime columns ---
-    if "Deadline" in df.columns:
-        df["Deadline"] = pd.to_datetime(df["Deadline"], errors="coerce").dt.date
-
     return df
 
 DATA_PATH = "data/final_table.xlsx"
 cache_bust = Path(DATA_PATH).stat().st_mtime  # auto-refresh cache when file changes
-
 df = load_data(DATA_PATH, cache_bust)
 
 # -----------------------------
-# 3) Derive Deadline Category
+# 3) Robust deadline parsing
 # -----------------------------
 TODAY = date.today()
 
-def categorize_deadline(deadline, status):
-    """Categorize by business relevance: In force / <1 year / >1 year."""
-    # Prefer status when explicitly says "In force"
-    if isinstance(status, str) and "in force" in status.lower():
-        return "In force"
-    if pd.isna(deadline):
-        return "Due > 1 year"  # fallback: assume far in future if missing
+Q_PAT = re.compile(r"\bq([1-4])\s*(\d{4})\b", re.IGNORECASE)
+YEAR_PAT = re.compile(r"^\s*(\d{4})\s*$")
+DATE_IN_TEXT_PAT = re.compile(
+    r"(\d{4}-\d{2}-\d{2})|(\d{2}[-/]\d{2}[-/]\d{4})|(\d{4}/\d{2}/\d{2})"
+)
+
+def _end_of_quarter(y: int, q: int) -> date:
+    month = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+    # last day of month
+    if month in (1,3,5,7,8,10,12):
+        day = 31
+    elif month in (4,6,9,11):
+        day = 30
+    else:
+        # Feb
+        day = 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28
+    return date(y, month, day)
+
+def _excel_serial_to_date(x: float) -> date | None:
+    # Excel origin 1899-12-30 (handles Excel's leap-year bug)
     try:
-        if deadline <= TODAY:
-            return "In force"
-        elif (deadline - TODAY).days <= 365:
-            return "Due < 1 year"
-        else:
-            return "Due > 1 year"
+        base = datetime(1899, 12, 30, tzinfo=timezone.utc)
+        dt = base + timedelta(days=float(x))
+        return dt.date()
     except Exception:
+        return None
+
+def extract_deadline_as_date(val) -> date | None:
+    """Return a date for clean dates, 'Estimated 2026-..', 'Q2 2026', Excel serials, or None."""
+    if pd.isna(val):
+        return None
+
+    # If already a date/datetime
+    if isinstance(val, pd.Timestamp):
+        return val.date()
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+
+    s = str(val).strip()
+    if not s:
+        return None
+
+    # Quarter notation (Q1 2026)
+    m = Q_PAT.search(s)
+    if m:
+        q = int(m.group(1)); y = int(m.group(2))
+        return _end_of_quarter(y, q)
+
+    # Year only ("2026")
+    m = YEAR_PAT.match(s)
+    if m:
+        y = int(m.group(1))
+        return date(y, 12, 31)
+
+    # Any ISO or common date found in text (e.g., "Estimated 2026-01-01")
+    m = DATE_IN_TEXT_PAT.search(s)
+    if m:
+        frag = m.group(0)
+        # Try multiple parsers
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(frag, fmt).date()
+            except Exception:
+                pass
+        # Fallback: pandas is good at free parsing
+        try:
+            return pd.to_datetime(frag, errors="raise").date()
+        except Exception:
+            pass
+
+    # Pure numeric (possibly Excel serial)
+    try:
+        if isinstance(val, (int, float)) or (isinstance(s, str) and re.fullmatch(r"\d+(\.\d+)?", s)):
+            num = float(val)
+            # Heuristic: Excel serials are usually > 20000
+            if num > 20000:
+                d = _excel_serial_to_date(num)
+                if d:
+                    return d
+    except Exception:
+        pass
+
+    # Last resort: pandas generic parser
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.date()
+    except Exception:
+        pass
+
+    return None
+
+def categorize_deadline(deadline_val, status_val) -> str:
+    """Three buckets: In force / Due < 1 year / Due > 1 year."""
+    # Respect explicit status
+    if isinstance(status_val, str) and "in force" in status_val.lower():
+        return "In force"
+
+    d = extract_deadline_as_date(deadline_val)
+    if d is None:
+        # With only 3 buckets, treat unknowns as long horizon (safer than 'in force')
         return "Due > 1 year"
 
+    if d <= TODAY:
+        return "In force"
+    elif (d - TODAY).days <= 365:
+        return "Due < 1 year"
+    else:
+        return "Due > 1 year"
+
+# Compute once
+df["__deadline_date__"] = df["Deadline"].apply(extract_deadline_as_date)
 df["Deadline Category"] = df.apply(
     lambda r: categorize_deadline(r.get("Deadline"), r.get("Status")), axis=1
 )
 
 # -----------------------------
-# 4) Sidebar Filters (with deadline filter)
+# 4) Sidebar Filters (incl. Deadline)
 # -----------------------------
 st.sidebar.header("🔎 Filters")
 
@@ -89,7 +182,7 @@ selected_packaging = st.sidebar.selectbox(
     "Packaging Type", options=["All", "Food Packaging"]
 )
 
-# Deadline (single)
+# Deadline (single, 3 buckets)
 deadline_options = ["All", "In force", "Due < 1 year", "Due > 1 year"]
 selected_deadline = st.sidebar.selectbox("Deadline", options=deadline_options, index=0)
 
@@ -135,15 +228,20 @@ display_cols = [
     "Reference",
     "Applicability",
     "Consequence",
-    "Deadline",
+    "Deadline",           # show original text
     "Status",
     "Evidence to Collect",
 ]
 
-# Convert deadline to string for Streamlit compatibility
-for col in ["Deadline"]:
-    if col in filtered.columns:
-        filtered[col] = filtered[col].astype(str).replace("NaT", "")
+# Show a clean date preview underneath if you ever want (hidden by default)
+# filtered["Parsed Deadline"] = filtered["__deadline_date__"].astype(str).replace("NaT", "")
+
+# Ensure Deadline prints nicely (no 00:00:00); if datetime slipped through
+if "Deadline" in filtered.columns:
+    # If a Timestamp sneaks in, convert to date string
+    if pd.api.types.is_datetime64_any_dtype(filtered["Deadline"]):
+        filtered["Deadline"] = filtered["Deadline"].dt.date
+    filtered["Deadline"] = filtered["Deadline"].astype(str).replace("NaT", "")
 
 column_config = {
     "Trigger": st.column_config.TextColumn(width="small"),
@@ -176,33 +274,24 @@ st.download_button(
 )
 
 # -----------------------------
-# 7) Styling: real wrap + no inner scroll + full width on collapse
+# 7) Styling (wrap + no inner scroll + expand on collapse)
 # -----------------------------
 st.markdown(
     """
 <style>
-/* --- Global container: always take full width --- */
 .block-container, [data-testid="stAppViewContainer"] {
     max-width: 100% !important;
     width: 100% !important;
 }
-
-/* --- No inner scrollbars, let the page scroll --- */
 [data-testid="stDataEditor"], [data-testid="stDataFrame"] {
     overflow: visible !important;
 }
-
-/* --- Header style --- */
 [data-testid="stDataEditor"] th, [data-testid="stDataFrame"] th {
     background-color: #f7f7f7 !important;
     font-weight: 600 !important;
     color: #333 !important;
     border-bottom: 1px solid #ddd !important;
 }
-
-/* 
-Force true WRAP in editor cells
-*/
 [data-testid="stDataEditor"] [role="gridcell"],
 [data-testid="stDataEditor"] [role="gridcell"] * {
     white-space: normal !important;
@@ -211,28 +300,15 @@ Force true WRAP in editor cells
     text-overflow: clip !important;
     overflow: visible !important;
 }
-
-/* Make rows auto-height and align to the top */
 [data-testid="stDataEditor"] [role="row"] {
     align-items: flex-start !important;
 }
-[data-testid="stDataEditor"] [role="gridcell"] {
-    align-items: flex-start !important;
-}
-
-/* Slightly taller baseline */
 [data-testid="stDataEditor"] td, [data-testid="stDataFrame"] td {
     line-height: 1.5 !important;
     vertical-align: top !important;
     border-bottom: 1px solid #eee !important;
 }
-
-/* --- Sidebar width --- */
-section[data-testid="stSidebar"] {
-    min-width: 320px !important;
-}
-
-/* --- When sidebar collapses, reclaim ALL left space --- */
+section[data-testid="stSidebar"] { min-width: 320px !important; }
 [data-testid="stSidebarCollapsedControl"] ~ div, 
 [data-testid="collapsedControl"] ~ div,
 [data-testid="stAppViewContainer"] > div:first-child {
@@ -240,11 +316,7 @@ section[data-testid="stSidebar"] {
     width: 100% !important;
     max-width: 100% !important;
 }
-
-/* --- Kill any horizontal scrollbar remnants --- */
-[data-testid="stDataEditor"] > div:has([role="grid"]) {
-    overflow-x: hidden !important;
-}
+[data-testid="stDataEditor"] > div:has([role="grid"]) { overflow-x: hidden !important; }
 </style>
 """,
     unsafe_allow_html=True,
