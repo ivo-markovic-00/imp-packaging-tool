@@ -3,7 +3,6 @@ import streamlit as st
 from pathlib import Path
 from datetime import date, datetime, timezone, timedelta
 import re
-import math
 
 # -----------------------------
 # 1) Page & Layout
@@ -32,43 +31,18 @@ cache_bust = Path(DATA_PATH).stat().st_mtime  # auto-refresh cache when file cha
 df = load_data(DATA_PATH, cache_bust)
 
 # -----------------------------
-# 3) Robust deadline parsing
+# 3) Robust deadline parsing (STATUS-DRIVEN)
 # -----------------------------
 TODAY = date.today()
 
-Q_PAT = re.compile(r"\bq([1-4])\s*(\d{4})\b", re.IGNORECASE)
-YEAR_PAT = re.compile(r"^\s*(\d{4})\s*$")
-DATE_IN_TEXT_PAT = re.compile(
-    r"(\d{4}-\d{2}-\d{2})|(\d{2}[-/]\d{2}[-/]\d{4})|(\d{4}/\d{2}/\d{2})"
-)
+# Extract an ISO-like date from any text (covers: "Estimated 2028-01-01", "2026-09-27 00:00:00", etc.)
+ISO_IN_TEXT = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
-def _end_of_quarter(y: int, q: int) -> date:
-    month = {1: 3, 2: 6, 3: 9, 4: 12}[q]
-    # last day of month
-    if month in (1,3,5,7,8,10,12):
-        day = 31
-    elif month in (4,6,9,11):
-        day = 30
-    else:
-        # Feb
-        day = 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28
-    return date(y, month, day)
-
-def _excel_serial_to_date(x: float) -> date | None:
-    # Excel origin 1899-12-30 (handles Excel's leap-year bug)
-    try:
-        base = datetime(1899, 12, 30, tzinfo=timezone.utc)
-        dt = base + timedelta(days=float(x))
-        return dt.date()
-    except Exception:
+def extract_date_from_any(val):
+    """Return a date from diverse inputs: datetime/date, 'YYYY-MM-DD', 'Estimated YYYY-MM-DD', '... 00:00:00'."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
-
-def extract_deadline_as_date(val) -> date | None:
-    """Return a date for clean dates, 'Estimated 2026-..', 'Q2 2026', Excel serials, or None."""
-    if pd.isna(val):
-        return None
-
-    # If already a date/datetime
+    # Direct datetime/date
     if isinstance(val, pd.Timestamp):
         return val.date()
     if isinstance(val, datetime):
@@ -80,75 +54,50 @@ def extract_deadline_as_date(val) -> date | None:
     if not s:
         return None
 
-    # Quarter notation (Q1 2026)
-    m = Q_PAT.search(s)
+    # Find ISO yyyy-mm-dd anywhere in the text (works for 'Estimated 2028-01-01' and '2026-09-27 00:00:00')
+    m = ISO_IN_TEXT.search(s)
     if m:
-        q = int(m.group(1)); y = int(m.group(2))
-        return _end_of_quarter(y, q)
-
-    # Year only ("2026")
-    m = YEAR_PAT.match(s)
-    if m:
-        y = int(m.group(1))
-        return date(y, 12, 31)
-
-    # Any ISO or common date found in text (e.g., "Estimated 2026-01-01")
-    m = DATE_IN_TEXT_PAT.search(s)
-    if m:
-        frag = m.group(0)
-        # Try multiple parsers
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-            try:
-                return datetime.strptime(frag, fmt).date()
-            except Exception:
-                pass
-        # Fallback: pandas is good at free parsing
         try:
-            return pd.to_datetime(frag, errors="raise").date()
+            return pd.to_datetime(m.group(1), errors="raise").date()
         except Exception:
             pass
 
-    # Pure numeric (possibly Excel serial)
+    # Last resort: generic parser (may parse dd/mm/yy etc.)
     try:
-        if isinstance(val, (int, float)) or (isinstance(s, str) and re.fullmatch(r"\d+(\.\d+)?", s)):
-            num = float(val)
-            # Heuristic: Excel serials are usually > 20000
-            if num > 20000:
-                d = _excel_serial_to_date(num)
-                if d:
-                    return d
-    except Exception:
-        pass
-
-    # Last resort: pandas generic parser
-    try:
-        parsed = pd.to_datetime(s, errors="coerce")
-        if pd.notna(parsed):
-            return parsed.date()
+        ts = pd.to_datetime(s, errors="coerce")
+        if pd.notna(ts):
+            return ts.date()
     except Exception:
         pass
 
     return None
 
-def categorize_deadline(deadline_val, status_val) -> str:
-    """Three buckets: In force / Due < 1 year / Due > 1 year."""
-    status = str(status_val or "").strip()
+def categorize_deadline_from_row(row):
+    """
+    Three buckets based on your concrete Status patterns:
+    - 'In Force' (any case/spacing)  → In force
+    - 'Estimated YYYY-MM-DD'         → parse date and bucket
+    - 'YYYY-MM-DD'                   → parse date and bucket
+    Fallback to Deadline if Status has no usable date.
+    """
+    raw_status = row.get("Status", "")
+    status = str(raw_status or "").strip().lower().replace("\u00a0", " ")
 
-    # 1️⃣ Explicit 'In Force'
-    if status.lower() == "in force":
+    # 1) Exact 'In Force' should ALWAYS be in force
+    if status == "in force":
         return "In force"
 
-    # 2️⃣ Extract date from either 'Estimated YYYY-MM-DD' or a pure date
-    date_text = status
-    if status.lower().startswith("estimated"):
-        date_text = status.split("estimated", 1)[-1].strip()
+    # 2) Prefer date embedded in STATUS (handles 'Estimated 2028-01-01' and plain ISO dates)
+    d = extract_date_from_any(raw_status)
 
-    # 3️⃣ Parse that date robustly
-    d = extract_deadline_as_date(date_text or deadline_val)
+    # 3) Fallback to Deadline column if Status has no usable date
+    if d is None:
+        d = extract_date_from_any(row.get("Deadline"))
+
+    # 4) Bucket by date (if still nothing, be conservative: far horizon)
     if d is None:
         return "Due > 1 year"
 
-    # 4️⃣ Bucket by time horizon
     if d <= TODAY:
         return "In force"
     elif (d - TODAY).days <= 365:
@@ -156,11 +105,8 @@ def categorize_deadline(deadline_val, status_val) -> str:
     else:
         return "Due > 1 year"
 
-# Compute once
-df["__deadline_date__"] = df["Deadline"].apply(extract_deadline_as_date)
-df["Deadline Category"] = df.apply(
-    lambda r: categorize_deadline(r.get("Deadline"), r.get("Status")), axis=1
-)
+# Compute once for the dataset
+df["Deadline Category"] = df.apply(categorize_deadline_from_row, axis=1)
 
 # -----------------------------
 # 4) Sidebar Filters (incl. Deadline)
@@ -241,12 +187,8 @@ display_cols = [
     "Evidence to Collect",
 ]
 
-# Show a clean date preview underneath if you ever want (hidden by default)
-# filtered["Parsed Deadline"] = filtered["__deadline_date__"].astype(str).replace("NaT", "")
-
 # Ensure Deadline prints nicely (no 00:00:00); if datetime slipped through
 if "Deadline" in filtered.columns:
-    # If a Timestamp sneaks in, convert to date string
     if pd.api.types.is_datetime64_any_dtype(filtered["Deadline"]):
         filtered["Deadline"] = filtered["Deadline"].dt.date
     filtered["Deadline"] = filtered["Deadline"].astype(str).replace("NaT", "")
