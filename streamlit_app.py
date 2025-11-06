@@ -140,6 +140,11 @@ display_cols = [
     "Evidence to Collect",
 ]
 
+# Convert deadline to string for Streamlit compatibility
+for col in ["Deadline"]:
+    if col in filtered.columns:
+        filtered[col] = filtered[col].astype(str).replace("NaT", "")
+
 column_config = {
     "Trigger": st.column_config.TextColumn(width="small"),
     "Description": st.column_config.TextColumn(width="large"),
