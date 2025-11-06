@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from pathlib import Path  # ← added import
 
 # -----------------------------
 # 1) Page & Layout
@@ -15,15 +16,18 @@ st.caption(
 )
 
 # -----------------------------
-# 2) Data
+# 2) Data (updated caching)
 # -----------------------------
 @st.cache_data
-def load_data():
-    df = pd.read_excel("data/final_table.xlsx")
+def load_data(data_path: str, cache_bust: float):
+    df = pd.read_excel(data_path)
     df.columns = df.columns.str.strip()
     return df
 
-df = load_data()
+DATA_PATH = "data/final_table.xlsx"
+cache_bust = Path(DATA_PATH).stat().st_mtime  # auto-refresh cache when file changes
+
+df = load_data(DATA_PATH, cache_bust)
 
 # -----------------------------
 # 3) Sidebar Filters (order)
